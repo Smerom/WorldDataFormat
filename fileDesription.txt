@@ -1,0 +1,32 @@
+FileHeader ->
+  Version uint64
+  HeaderLength uint64
+  SubdivisionCount uint64
+  FrameSetCount uint64
+  TypesBitField uint64 // first bit bool for rendered or not
+FrameSets ->
+  Header ->
+    TotalSize uint64
+    Version uint64
+    HeaderLength uint64
+    FrameCount uint64
+    TypesOffsets []uint64 // In Bitfield Order and number
+  FrameOfType ->
+    Header ->
+      // depends on frame type
+    Data ->
+      // depends on frame type
+  
+
+ElevationFrame ->
+  Header ->
+    DataSize uint64
+    StorageFlags uint64
+  Data ->
+
+ColorFrame ->
+  Header ->
+    DataSize uint64
+    StorageFlags uint64
+  Data ->
+    // arrainged by channel, ie all green in one block, all red in another, all blue, ect
