@@ -2,14 +2,14 @@ package worldDataFormat
 
 import (
 	//"bytes"
-	"log"
-	"io"
-	"errors"
+	"bytes"
 	"encoding/binary"
+	"errors"
+	"io"
+	"log"
 )
 
 const WorldSimulationVersion = 1
-
 
 /* There are several modes of reading and writing
  * A standard write writes only the information already given to the WorldSimulation object
@@ -20,26 +20,25 @@ const WorldSimulationVersion = 1
  */
 
 type WorldSimulation struct {
-	frameSets []FrameSet
-	subdivisions int
+	frameSets       []FrameSet
+	subdivisions    int
 	subdivisionsSet bool
 
-	frameSetStream chan FrameSet
+	frameSetStream      chan FrameSet
 	writeFinishedSignal chan bool
-	isStreamingWrite bool
+	isStreamingWrite    bool
 
 	isCompressed bool
-	isRendered bool
+	isRendered   bool
 	typesToWrite uint64
 
 	typesRead uint64
-
 
 	source io.ReadSeeker
 	target io.Writer
 }
 
-func (sim *WorldSimulation)AddFrameSet(set FrameSet) {
+func (sim *WorldSimulation) AddFrameSet(set FrameSet) {
 	if sim.isStreamingWrite {
 		sim.frameSetStream <- set
 	} else {
@@ -48,7 +47,7 @@ func (sim *WorldSimulation)AddFrameSet(set FrameSet) {
 }
 
 // blocks until all writes are finished
-func (sim *WorldSimulation)FlushAndCloseWriteStream() {
+func (sim *WorldSimulation) FlushAndCloseWriteStream() {
 	// only close if is streaming write
 	if sim.isStreamingWrite {
 		close(sim.frameSetStream)
@@ -56,36 +55,36 @@ func (sim *WorldSimulation)FlushAndCloseWriteStream() {
 	}
 }
 
-func (sim *WorldSimulation)FrameSets() []FrameSet {
+func (sim *WorldSimulation) FrameSets() []FrameSet {
 	return sim.frameSets
 }
 
-func (sim *WorldSimulation)SetSubdivisions(subdivisions int) {
+func (sim *WorldSimulation) SetSubdivisions(subdivisions int) {
 	sim.subdivisions = subdivisions
 	sim.subdivisionsSet = true
 }
 
-func (sim *WorldSimulation)Subdivisions() int {
+func (sim *WorldSimulation) Subdivisions() int {
 	return sim.subdivisions
 }
 
-func (sim *WorldSimulation)WriteFull(target io.Writer, isCompressed bool, typesToWrite uint64) error {
+func (sim *WorldSimulation) WriteFull(target io.Writer, isCompressed bool, typesToWrite uint64) error {
 	return sim.internalWrite(target, isCompressed, false, typesToWrite)
 }
 
-func (sim *WorldSimulation)WriteNext() error {
+func (sim *WorldSimulation) WriteNext() error {
 	return sim.internalWriteNext()
 }
 
-func (sim *WorldSimulation)WriteRendered(target io.Writer, isCompressed bool, typesToWrite uint64) error {
+func (sim *WorldSimulation) WriteRendered(target io.Writer, isCompressed bool, typesToWrite uint64) error {
 	return sim.internalWrite(target, isCompressed, true, typesToWrite)
 }
 
-func (sim *WorldSimulation)ReadToWriter(source io.ReadSeeker, target io.Writer, isCompressed, isRendered bool, typesToWrite uint64) error {
+func (sim *WorldSimulation) ReadToWriter(source io.ReadSeeker, target io.Writer, isCompressed, isRendered bool, typesToWrite uint64) error {
 	return sim.internalReadToWriter(source, target, isCompressed, isRendered, typesToWrite)
 }
 
-func (sim *WorldSimulation)StreamWriteRendered(target io.WriteSeeker, isCompressed bool, typesToWrite uint64) chan error {
+func (sim *WorldSimulation) StreamWriteRendered(target io.WriteSeeker, isCompressed bool, typesToWrite uint64) chan error {
 	sim.frameSetStream = make(chan FrameSet, 1)
 	sim.isStreamingWrite = true
 
@@ -101,7 +100,48 @@ func (sim *WorldSimulation)StreamWriteRendered(target io.WriteSeeker, isCompress
 	return errChan
 }
 
-func (sim *WorldSimulation)writeHeader(target io.Writer, typesToWrite uint64) error {
+func (sim *WorldSimulation) StreamWriteRenderedSets(isCompressed bool, typesToWrite uint64) <-chan bytes.Buffer {
+	sim.frameSetStream = make(chan FrameSet, 1)
+	sim.isStreamingWrite = true
+
+	// probably should put this elsewhere, but for now
+	sim.writeFinishedSignal = make(chan bool, 1)
+
+	bufChan := make(chan bytes.Buffer, 2)
+
+	go func() {
+		// write any previously added frames
+		var err error
+		var buff bytes.Buffer
+		err = sim.internalWrite(&buff, isCompressed, true, typesToWrite)
+		if err != nil {
+			log.Printf("Error on initial write: %s", err)
+			close(bufChan)
+			return
+		}
+
+		bufChan <- buff
+
+		for set := range sim.frameSetStream {
+			// if !ok {
+			// 	sim.writeFinishedSignal <- true // indicate that all sets are finished writing
+			// 	close(bufChan)
+			// 	return
+			// }
+			buff = bytes.Buffer{}
+			err = set.internalWrite(&buff, isCompressed, true, typesToWrite)
+			if err != nil {
+				log.Printf("Error on frame write: %s", err)
+				close(bufChan)
+				return
+			}
+			bufChan <- buff
+		}
+	}()
+	return bufChan
+}
+
+func (sim *WorldSimulation) writeHeader(target io.Writer, typesToWrite uint64) error {
 	var err error
 	err = binary.Write(target, binary.LittleEndian, uint64(WorldSimulationVersion))
 	if err != nil {
@@ -126,7 +166,7 @@ func (sim *WorldSimulation)writeHeader(target io.Writer, typesToWrite uint64) er
 	return nil
 }
 
-func (sim *WorldSimulation)internalWrite(target io.Writer, isCompressed bool, isRendered bool, typesToWrite uint64) error{
+func (sim *WorldSimulation) internalWrite(target io.Writer, isCompressed bool, isRendered bool, typesToWrite uint64) error {
 	var err error
 
 	if sim.subdivisionsSet == false {
@@ -149,7 +189,7 @@ func (sim *WorldSimulation)internalWrite(target io.Writer, isCompressed bool, is
 	return nil
 }
 
-func (sim *WorldSimulation)internalWriteNext() error {
+func (sim *WorldSimulation) internalWriteNext() error {
 	var err error
 
 	set, err := internalReadFrameSet(sim.source, sim.typesRead)
@@ -168,7 +208,7 @@ func (sim *WorldSimulation)internalWriteNext() error {
 	return nil
 }
 
-func (sim *WorldSimulation)internalStreamWrite(target io.WriteSeeker, isCompressed bool, isRendered bool, typesToWrite uint64) error {
+func (sim *WorldSimulation) internalStreamWrite(target io.WriteSeeker, isCompressed bool, isRendered bool, typesToWrite uint64) error {
 	if sim.frameSetStream == nil || !sim.isStreamingWrite {
 		return errors.New("Not set up to stream sets")
 	}
@@ -180,7 +220,7 @@ func (sim *WorldSimulation)internalStreamWrite(target io.WriteSeeker, isCompress
 	}
 
 	for {
-		set, ok := <- sim.frameSetStream
+		set, ok := <-sim.frameSetStream
 
 		if !ok {
 			sim.writeFinishedSignal <- true // indicate that all sets are finished writing
@@ -195,12 +235,10 @@ func (sim *WorldSimulation)internalStreamWrite(target io.WriteSeeker, isCompress
 
 	// need to update frame count
 
-
 	return nil
 }
 
-
-func (sim *WorldSimulation)readHeader(source io.ReadSeeker) error {
+func (sim *WorldSimulation) readHeader(source io.ReadSeeker) error {
 	var err error
 	// read version
 	var version uint64
@@ -243,14 +281,14 @@ func (sim *WorldSimulation)readHeader(source io.ReadSeeker) error {
 	return nil
 }
 
-func (sim *WorldSimulation)internalReadToWriter(source io.ReadSeeker, target io.Writer, isCompressed, isRendered bool, typesToWrite uint64) error {
+func (sim *WorldSimulation) internalReadToWriter(source io.ReadSeeker, target io.Writer, isCompressed, isRendered bool, typesToWrite uint64) error {
 	sim.source = source
 	sim.target = target
 	sim.isCompressed = isCompressed
 	sim.isRendered = isRendered
 	sim.typesToWrite = typesToWrite
 
-	// start read 
+	// start read
 	err := sim.readHeader(source)
 	if err != nil {
 		return err
