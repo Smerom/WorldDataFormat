@@ -1,39 +1,44 @@
 package worldDataFormat
 
 import (
-	"io"
-	//"log"
-	"io/ioutil"
-	"encoding/binary"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
+	"io" //"log"
+	"io/ioutil"
+	"sort"
 )
 
 type RenderedElevation struct {
 	section byte
-	value byte
+	value   byte
 }
 
 type ElevationFrame struct {
-	elevations []float64 // external getter and setter provided
+	sealevel           float64
+	elevations         []float64           // external getter and setter provided
 	renderedElevations []RenderedElevation // currently not externally accesible
 
 	data []byte // data stored here after read as we might not need to decompress it
 
 	// frame attributes used in header
-	dataReadSize uint64
+	dataReadSize     uint64
 	isFromCompressed bool
-	isFromRendered bool
+	isFromRendered   bool
+}
+
+func (frame *ElevationFrame) SetSealevel(value float64) {
+	frame.sealevel = value
 }
 
 // need to update rendered, vs unrendered state when setting elevation values
-func (frame *ElevationFrame)SetElevations(values []float64) {
+func (frame *ElevationFrame) SetElevations(values []float64) {
 	frame.elevations = values
 	frame.renderedElevations = nil
 	frame.isFromRendered = false
 }
 
-func (frame *ElevationFrame)Elevations() []float64 {
+func (frame *ElevationFrame) Elevations() []float64 {
 	if frame.isFromRendered {
 		return nil
 	}
@@ -41,12 +46,12 @@ func (frame *ElevationFrame)Elevations() []float64 {
 }
 
 // writes frame as loss-less float64s
-func (frame *ElevationFrame)WriteFull(target io.Writer, isCompressed bool) error {
+func (frame *ElevationFrame) WriteFull(target io.Writer, isCompressed bool) error {
 	return frame.internalWrite(target, isCompressed, false, nil)
 }
 
 // renders frame to a color scheme, information lost in data written
-func (frame *ElevationFrame)WriteRendered(target io.Writer, isCompressed bool) error {
+func (frame *ElevationFrame) WriteRendered(target io.Writer, isCompressed bool) error {
 	return frame.internalWrite(target, isCompressed, true, nil)
 }
 
@@ -56,7 +61,7 @@ func ReadElevationFrame(source io.Reader) (ElevationFrame, error) {
 }
 
 // writes header values describing the frame data
-func (frame *ElevationFrame)writeHeader(target io.Writer, dataSize uint64, flags uint64) error {
+func (frame *ElevationFrame) writeHeader(target io.Writer, dataSize uint64, flags uint64) error {
 	//log.Printf("Writing size %d", dataSize)
 	err := binary.Write(target, binary.LittleEndian, dataSize)
 	if err != nil {
@@ -72,10 +77,10 @@ func (frame *ElevationFrame)writeHeader(target io.Writer, dataSize uint64, flags
 
 // writes header followed by elevation frame data in the specified format (compressed or not, rendered or not)
 // prevFrame used for time series compression
-func (frame *ElevationFrame)internalWrite(target io.Writer, isCompressed, isRendered bool, prevFrame *ElevationFrame) error {
+func (frame *ElevationFrame) internalWrite(target io.Writer, isCompressed, isRendered bool, prevFrame *ElevationFrame) error {
 	var err error
 	// must have data somewhere
-	if len(frame.elevations) == 0 && len(frame.renderedElevations) == 0 && frame.data == nil{
+	if len(frame.elevations) == 0 && len(frame.renderedElevations) == 0 && frame.data == nil {
 		return NoData
 	}
 	var flags uint64
@@ -139,37 +144,13 @@ func (frame *ElevationFrame)internalWrite(target io.Writer, isCompressed, isRend
 		if err != nil {
 			return err
 		}
-		
+
 	} else {
 		// we have full data currently
 		// render if needed
 		if isRendered && frame.renderedElevations == nil {
 			// create our rendering
-			frame.renderedElevations = make([]RenderedElevation, len(frame.elevations))
-			for index, elevation := range frame.elevations {
-				var fromSeaLevel = elevation - 9620;
-			    var rendered RenderedElevation
-			    if fromSeaLevel < -3800 {
-			    	rendered.section = 0
-			    	rendered.value = 0
-			    } else if fromSeaLevel < 0 {
-			    	rendered.section = 0
-			    	rendered.value = byte((fromSeaLevel + 3800)/3800 * 255)
-			    } else if fromSeaLevel < 3000 {
-			    	rendered.section = 1
-			    	rendered.value = byte(fromSeaLevel / 3000 * 255)
-			    } else if fromSeaLevel < 7000 {
-			    	rendered.section = 2
-			    	rendered.value = byte((fromSeaLevel - 3000) / 4000 * 255)
-			    } else if fromSeaLevel < 14000 {
-			    	rendered.section = 3
-			    	rendered.value = byte((fromSeaLevel - 7000) / 7000 * 255)
-			    } else {
-			    	rendered.section = 3
-			    	rendered.value = 255
-			    }
-			    frame.renderedElevations[index] = rendered
-			}
+			frame.internalRenderElevations(true) // default to relative for now
 		}
 
 		var data bytes.Buffer
@@ -242,11 +223,108 @@ func (frame *ElevationFrame)internalWrite(target io.Writer, isCompressed, isRend
 		}
 	}
 
-	return nil 
+	return nil
+}
+
+func (frame *ElevationFrame) internalRenderElevations(relative bool) {
+	frame.renderedElevations = make([]RenderedElevation, len(frame.elevations))
+	if relative {
+		// split into ocean and land
+		type indexElev struct {
+			elev  float64
+			index int
+		}
+		var oceans, land []indexElev
+		for index, elevation := range frame.elevations {
+			var fromSeaLevel = elevation - frame.sealevel
+			if fromSeaLevel < 0 {
+				oceans = append(oceans, indexElev{elevation, index})
+			} else {
+				land = append(land, indexElev{elevation, index})
+			}
+		}
+
+		// sort
+		sort.Slice(oceans, func(i, j int) bool {
+			return oceans[i].elev < oceans[j].elev
+		})
+
+		sort.Slice(land, func(i, j int) bool {
+			return land[i].elev < land[j].elev
+		})
+
+		// color
+		binSize := len(oceans) / 256
+		overflow := len(oceans) % 256
+		var bin byte
+		binCount := 0
+		for _, val := range oceans {
+			var rendered RenderedElevation
+			rendered.section = 0
+			rendered.value = bin
+			binCount++
+			if (binCount == binSize && int(bin) > overflow) || binCount > binSize {
+				bin++
+				binCount = 0
+			}
+
+			frame.renderedElevations[val.index] = rendered
+		}
+
+		// color land
+		binSize = len(land) / (256 * 3)
+		overflow = len(land) % (256 * 3)
+		var bigBin byte
+		bin = 0
+		binCount = 0
+		for _, val := range land {
+			var rendered RenderedElevation
+			rendered.section = bigBin + 1
+			rendered.value = bin
+			binCount++
+			totBin := int(bin) + int(bigBin)*256
+			if (binCount == binSize && totBin > overflow) || binCount > binSize {
+				if bin == 255 {
+					bin = 0
+					bigBin++
+				} else {
+					bin++
+				}
+				binCount = 0
+			}
+
+			frame.renderedElevations[val.index] = rendered
+		}
+	} else {
+		for index, elevation := range frame.elevations {
+			var fromSeaLevel = elevation - frame.sealevel
+			var rendered RenderedElevation
+			if fromSeaLevel < -3800 {
+				rendered.section = 0
+				rendered.value = 0
+			} else if fromSeaLevel < 0 {
+				rendered.section = 0
+				rendered.value = byte((fromSeaLevel + 3800) / 3800 * 255)
+			} else if fromSeaLevel < 3000 {
+				rendered.section = 1
+				rendered.value = byte(fromSeaLevel / 3000 * 255)
+			} else if fromSeaLevel < 7000 {
+				rendered.section = 2
+				rendered.value = byte((fromSeaLevel - 3000) / 4000 * 255)
+			} else if fromSeaLevel < 14000 {
+				rendered.section = 3
+				rendered.value = byte((fromSeaLevel - 7000) / 7000 * 255)
+			} else {
+				rendered.section = 3
+				rendered.value = 255
+			}
+			frame.renderedElevations[index] = rendered
+		}
+	}
 }
 
 // reads frame header, must be called before we can read the elevation or rendered elevation data
-func (frame *ElevationFrame)internalReadHeader(source io.Reader) error {
+func (frame *ElevationFrame) internalReadHeader(source io.Reader) error {
 	err := binary.Read(source, binary.LittleEndian, &frame.dataReadSize)
 	if err != nil {
 		return err
@@ -259,10 +337,10 @@ func (frame *ElevationFrame)internalReadHeader(source io.Reader) error {
 		return err
 	}
 	//log.Printf("Read flags as: %d", flags)
-	if flags & IsCompressedFlag > 0 {
+	if flags&IsCompressedFlag > 0 {
 		frame.isFromCompressed = true
 	}
-	if flags & IsRenderedFlag > 0 {
+	if flags&IsRenderedFlag > 0 {
 		frame.isFromRendered = true
 	}
 	return nil
