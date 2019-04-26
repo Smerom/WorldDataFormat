@@ -162,12 +162,10 @@ class AgeFrame {
 
 // rendered only
 class ElevationFrame {
-	elevations: Uint8Array;
+	elevations: Int16Array;
 	readBytes: number;
 
 	constructor(data: DataView, prevElevations: ElevationFrame, vertexCount: number) {
-		this.elevations = new Uint8Array(2*vertexCount);
-
 		let dataSize: number;
 		dataSize = data.getUint32(0, true)
 		
@@ -180,37 +178,17 @@ class ElevationFrame {
 		let buff: Uint8Array;
 		if(isTypeFlagSet(TypeFlags.IsCompressedFlag, storageFlags)) {
 			try {
+				// inflate and convert to int 16 array
 				buff = pako.inflate(new Uint8Array(data.buffer, 16, dataSize));
+				this.elevations = new Int16Array(buff.buffer)
 			} catch (err) {
 				console.log(err);
 			}
 		} else {
-			buff = new Uint8Array(data.buffer, 16, dataSize);
+			this.elevations = new Int16Array(data.buffer, 16, dataSize);
 		}
 		// set data read from data buffer
 		this.readBytes = dataSize + 16;
-
-		// read the segments
-		let byteOffset: number = 0
-		let bitOffset: number = 0
-		for (var i = 0; i < vertexCount; ++i) {
-			if(bitOffset > 6) {
-				bitOffset = 0;
-				byteOffset++;
-			}
-			this.elevations[i*2] = (buff[byteOffset] & (3 << bitOffset)) >>> bitOffset;
-			bitOffset += 2;
-		}
-		byteOffset++ // last byte wont be included yet
-
-		// read the values
-		for (var i = 0; i < vertexCount; ++i) {
-			if(prevElevations != null) {
-				this.elevations[i*2 + 1] = buff[byteOffset + i] + prevElevations.elevations[i*2 + 1];
-			} else {
-				this.elevations[i*2 + 1] = buff[byteOffset + i];
-			}
-		}
 	}
 }
 

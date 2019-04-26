@@ -6,18 +6,13 @@ import (
 	"encoding/binary"
 	"io" //"log"
 	"io/ioutil"
-	"sort"
+	"math"
 )
-
-type RenderedElevation struct {
-	section byte
-	value   byte
-}
 
 type ElevationFrame struct {
 	sealevel           float64
-	elevations         []float64           // external getter and setter provided
-	renderedElevations []RenderedElevation // currently not externally accesible
+	elevations         []float64 // external getter and setter provided
+	renderedElevations []int16   // currently not externally accesible
 
 	data []byte // data stored here after read as we might not need to decompress it
 
@@ -150,38 +145,25 @@ func (frame *ElevationFrame) internalWrite(target io.Writer, isCompressed, isRen
 		// render if needed
 		if isRendered && frame.renderedElevations == nil {
 			// create our rendering
-			frame.internalRenderElevations(true) // default to relative for now
+			frame.internalRenderElevations() // default to relative for now
 		}
 
 		var data bytes.Buffer
 
-		// rearrange color bits for initial compression
 		if isRendered {
-			var shiftAmount byte = 0
-			var currentByte byte
-			for _, rendered := range frame.renderedElevations {
-				// write current byte if full
-				if shiftAmount > 6 {
-					data.Write([]byte{currentByte})
-					currentByte = 0
-					shiftAmount = 0
-				}
-				currentByte = currentByte | (rendered.section << shiftAmount)
-				shiftAmount += 2
-			}
-			// last byte won't yet be written, write it
-			data.Write([]byte{currentByte})
-
 			// write values
 			for index, rendered := range frame.renderedElevations {
 				// if we have a previous frame, take difference for higher statistical redundancy before compression
-				var valueToWrite byte
+				var valueToWrite int16
 				if prevFrame != nil {
-					valueToWrite = rendered.value - prevFrame.renderedElevations[index].value
+					valueToWrite = rendered - prevFrame.renderedElevations[index]
 				} else {
-					valueToWrite = rendered.value
+					valueToWrite = rendered
 				}
-				data.Write([]byte{valueToWrite})
+				err = binary.Write(&data, binary.LittleEndian, valueToWrite)
+				if err != nil {
+					return err
+				}
 			}
 		} else {
 			for _, val := range frame.elevations {
@@ -226,99 +208,16 @@ func (frame *ElevationFrame) internalWrite(target io.Writer, isCompressed, isRen
 	return nil
 }
 
-func (frame *ElevationFrame) internalRenderElevations(relative bool) {
-	frame.renderedElevations = make([]RenderedElevation, len(frame.elevations))
-	if relative {
-		// split into ocean and land
-		type indexElev struct {
-			elev  float64
-			index int
-		}
-		var oceans, land []indexElev
-		for index, elevation := range frame.elevations {
-			var fromSeaLevel = elevation - frame.sealevel
-			if fromSeaLevel < 0 {
-				oceans = append(oceans, indexElev{elevation, index})
-			} else {
-				land = append(land, indexElev{elevation, index})
-			}
-		}
-
-		// sort
-		sort.Slice(oceans, func(i, j int) bool {
-			return oceans[i].elev < oceans[j].elev
-		})
-
-		sort.Slice(land, func(i, j int) bool {
-			return land[i].elev < land[j].elev
-		})
-
-		// color
-		binSize := len(oceans) / 256
-		overflow := len(oceans) % 256
-		var bin byte
-		binCount := 0
-		for _, val := range oceans {
-			var rendered RenderedElevation
-			rendered.section = 0
-			rendered.value = bin
-			binCount++
-			if (binCount == binSize && int(bin) > overflow) || binCount > binSize {
-				bin++
-				binCount = 0
-			}
-
-			frame.renderedElevations[val.index] = rendered
-		}
-
-		// color land
-		binSize = len(land) / (256 * 3)
-		overflow = len(land) % (256 * 3)
-		var bigBin byte
-		bin = 0
-		binCount = 0
-		for _, val := range land {
-			var rendered RenderedElevation
-			rendered.section = bigBin + 1
-			rendered.value = bin
-			binCount++
-			totBin := int(bin) + int(bigBin)*256
-			if (binCount == binSize && totBin > overflow) || binCount > binSize {
-				if bin == 255 {
-					bin = 0
-					bigBin++
-				} else {
-					bin++
-				}
-				binCount = 0
-			}
-
-			frame.renderedElevations[val.index] = rendered
-		}
-	} else {
-		for index, elevation := range frame.elevations {
-			var fromSeaLevel = elevation - frame.sealevel
-			var rendered RenderedElevation
-			if fromSeaLevel < -3800 {
-				rendered.section = 0
-				rendered.value = 0
-			} else if fromSeaLevel < 0 {
-				rendered.section = 0
-				rendered.value = byte((fromSeaLevel + 3800) / 3800 * 255)
-			} else if fromSeaLevel < 3000 {
-				rendered.section = 1
-				rendered.value = byte(fromSeaLevel / 3000 * 255)
-			} else if fromSeaLevel < 7000 {
-				rendered.section = 2
-				rendered.value = byte((fromSeaLevel - 3000) / 4000 * 255)
-			} else if fromSeaLevel < 14000 {
-				rendered.section = 3
-				rendered.value = byte((fromSeaLevel - 7000) / 7000 * 255)
-			} else {
-				rendered.section = 3
-				rendered.value = 255
-			}
-			frame.renderedElevations[index] = rendered
+func (frame *ElevationFrame) internalRenderElevations() {
+	frame.renderedElevations = make([]int16, len(frame.elevations))
+	for index, elevation := range frame.elevations {
+		var fromSeaLevel = elevation - frame.sealevel
+		if fromSeaLevel < float64(math.MinInt16) {
+			frame.renderedElevations[index] = math.MinInt16
+		} else if fromSeaLevel > float64(math.MaxInt16) {
+			frame.renderedElevations[index] = math.MaxInt16
+		} else {
+			frame.renderedElevations[index] = int16(fromSeaLevel)
 		}
 	}
 }
