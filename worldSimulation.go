@@ -291,6 +291,9 @@ func (sim *WorldSimulation) internalReadToWriter(source io.ReadSeeker, target io
 
 			if ok {
 				readFrames = readFrames[setCount:] // TODO: will this discard frames during GC?
+			} else {
+				// break here if we are done
+				break
 			}
 		}
 	}
