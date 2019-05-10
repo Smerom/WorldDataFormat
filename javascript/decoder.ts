@@ -187,6 +187,8 @@ class ElevationFrame {
 		} else {
 			this.elevations = new Int16Array(data.buffer, 16, dataSize);
 		}
+		// TODO: calculate elevations from previous frame if set
+
 		// set data read from data buffer
 		this.readBytes = dataSize + 16;
 	}
