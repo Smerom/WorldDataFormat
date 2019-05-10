@@ -2,7 +2,7 @@ package worldDataFormat
 
 import (
 	//"bytes"
-	"bytes"
+
 	"encoding/binary"
 	"errors"
 	"io"
@@ -100,46 +100,6 @@ func (sim *WorldSimulation) StreamWriteRendered(target io.WriteSeeker, isCompres
 	return errChan
 }
 
-// StreamWriteRenderedSets not sure how it's different than StreamWriteRendered
-func (sim *WorldSimulation) StreamWriteRenderedSets(isCompressed bool, typesToWrite uint64) <-chan bytes.Buffer {
-	sim.frameSetStream = make(chan FrameSet, 1)
-	sim.isStreamingWrite = true
-
-	// probably should put this elsewhere, but for now
-	sim.writeFinishedSignal = make(chan bool, 1)
-
-	bufChan := make(chan bytes.Buffer, 2)
-
-	go func() {
-		// write any previously added frames
-		var err error
-		var buff bytes.Buffer
-		err = sim.internalWrite(&buff, isCompressed, true, typesToWrite)
-		if err != nil {
-			log.Printf("Error on initial write: %s", err)
-			close(bufChan)
-			return
-		}
-
-		bufChan <- buff
-
-		for set := range sim.frameSetStream {
-
-			buff = bytes.Buffer{}
-			err = set.internalWrite(&buff, isCompressed, true, typesToWrite)
-			if err != nil {
-				log.Printf("Error on frame write: %s", err)
-				close(bufChan)
-				return
-			}
-			bufChan <- buff
-		}
-		sim.writeFinishedSignal <- true // indicate that all sets are finished writing
-		close(bufChan)
-	}()
-	return bufChan
-}
-
 func (sim *WorldSimulation) writeHeader(target io.Writer, typesToWrite uint64) error {
 	var err error
 	err = binary.Write(target, binary.LittleEndian, uint64(WorldSimulationVersion))
@@ -218,21 +178,17 @@ func (sim *WorldSimulation) internalStreamWrite(target io.WriteSeeker, isCompres
 		return err
 	}
 
-	for {
-		set, ok := <-sim.frameSetStream
-
-		if !ok {
-			sim.writeFinishedSignal <- true // indicate that all sets are finished writing
-			return nil
-		}
-
+	for set := range sim.frameSetStream {
 		err = set.internalWrite(target, isCompressed, isRendered, typesToWrite)
 		if err != nil {
+			sim.writeFinishedSignal <- true // indicate that all sets are finished writing
 			return err
 		}
 	}
 
 	// need to update frame count
+
+	sim.writeFinishedSignal <- true // indicate that all sets are finished writing
 
 	return nil
 }
