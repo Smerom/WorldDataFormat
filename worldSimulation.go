@@ -94,7 +94,9 @@ func (sim *WorldSimulation) StreamWriteRendered(target io.WriteSeeker, isCompres
 	sim.writeFinishedSignal = make(chan bool, 1)
 
 	go func() {
-		errChan <- sim.internalStreamWrite(target, isCompressed, true, typesToWrite)
+		err := sim.internalStreamWrite(target, isCompressed, true, typesToWrite)
+		log.Printf("Error on sim?: %s", err)
+		errChan <- err
 		close(errChan)
 	}()
 	return errChan
