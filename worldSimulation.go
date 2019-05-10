@@ -289,7 +289,9 @@ func (sim *WorldSimulation) internalReadToWriter(source io.ReadSeeker, target io
 				log.Printf("Error writing frame set")
 			}
 
-			readFrames = readFrames[setCount:] // TODO: will this discard frames during GC?
+			if ok {
+				readFrames = readFrames[setCount:] // TODO: will this discard frames during GC?
+			}
 		}
 	}
 
