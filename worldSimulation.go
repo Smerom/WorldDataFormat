@@ -95,7 +95,7 @@ func (sim *WorldSimulation) StreamWriteRendered(target io.WriteSeeker, isCompres
 
 	go func() {
 		err := sim.internalStreamWrite(target, isCompressed, true, typesToWrite)
-		log.Printf("Error on sim?: %s", err)
+		// log.Printf("Error on sim?: %s", err)
 		errChan <- err
 		close(errChan)
 	}()
@@ -257,27 +257,30 @@ func (sim *WorldSimulation) internalReadToWriter(source io.ReadSeeker, target io
 
 	// read sets and collect in requested size
 	var readFrames []Frame
-	for {
+	var ok = true
+	for ok {
 		// read set
 		set, err := internalReadFrameSet(sim.source, sim.typesRead)
 		if err == io.EOF {
-			// write last frame?
-			break
+			ok = false // close loop after written
 		} else if err != nil {
 			log.Printf("Error reading next frame set: %s", err)
 			return err
+		} else {
+			readFrames = append(readFrames, set.Frames()...)
 		}
-
-		readFrames = append(readFrames, set.Frames()...)
 
 		// write as many as possible
 		for {
-			if len(readFrames) < setCount {
+			remainingCount := len(readFrames)
+			// write fewer than set cound if no longer ok (EOF)
+			if remainingCount < setCount && ok {
 				break
 			}
 
 			var writeSet FrameSet
-			for i := 0; i < setCount; i++ {
+
+			for i := 0; i < setCount && i < remainingCount; i++ {
 				writeSet.AddFrame(readFrames[i])
 			}
 
