@@ -173,6 +173,7 @@ func (sim *WorldSimulation) internalStreamWrite(target io.WriteSeeker, isCompres
 	// always signal write finished when exiting this function
 	defer func() {
 		sim.writeFinishedSignal <- true // indicate that all sets are finished writing
+		close(sim.writeFinishedSignal)
 	}()
 	if sim.frameSetStream == nil || !sim.isStreamingWrite {
 		return errors.New("Not set up to stream sets")
