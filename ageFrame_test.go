@@ -19,8 +19,9 @@ func randomAgeFrame(rnd *rand.Rand) AgeFrame {
 var _ = Describe("AgeFrame", func() {
 	It("should write the correct 64bit float for age", func() {
 		// try a bunch
+		rng := rand.New(rand.NewSource(12345))
 		for i := 0; i < 10000; i++ {
-			frame := randomAgeFrame(rand.New(rand.NewSource(12345)))
+			frame := randomAgeFrame(rng)
 			var setAge = frame.Age
 
 			var data bytes.Buffer
